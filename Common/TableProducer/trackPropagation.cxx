@@ -150,7 +150,7 @@ struct TrackPropagation {
   PROCESS_SWITCH(TrackPropagation, processStandard, "Process without covariance", true);
 
   void processCovariance(soa::Join<aod::StoredTracksIU, aod::TracksCovIU> const& tracks, aod::Collisions const&, aod::BCsWithTimestamps const& bcs)
-  {
+  {// this is the process function to be modified
     if (bcs.size() == 0) {
       return;
     }
