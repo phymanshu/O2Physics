@@ -70,6 +70,9 @@ struct TrackPropagation {
   Configurable<std::string> grpmagPath{"grpmagPath", "GLO/Config/GRPMagField", "CCDB path of the GRPMagField object"};
   Configurable<std::string> mVtxPath{"mVtxPath", "GLO/Calib/MeanVertex", "Path of the mean vertex file"};
   Configurable<float> minPropagationRadius{"minPropagationDistance", o2::constants::geom::XTPCInnerRef + 0.1, "Only tracks which are at a smaller radius will be propagated, defaults to TPC inner wall"};
+  Configurable<bool> useImprover{"useImprover", 0, "Apply Improver/DCA corrections to MC"};
+
+  using tracksWithMc = soa::Join<aod::StoredTracksIU, aod::McTrackLabels, aod::TracksCovIU>;
 
   void init(o2::framework::InitContext& initContext)
   {
@@ -93,7 +96,6 @@ struct TrackPropagation {
     ccdb->setURL(ccdburl);
     ccdb->setCaching(true);
     ccdb->setLocalObjectValidityChecking();
-
     lut = o2::base::MatLayerCylSet::rectifyPtrFromFile(ccdb->get<o2::base::MatLayerCylSet>(lutPath));
   }
 
@@ -141,6 +143,7 @@ struct TrackPropagation {
         }
         trackType = aod::track::Track;
       }
+
       FillTracksPar(track, trackType, trackPar);
       if (fillTracksDCA) {
         tracksDCA(dcaInfo[0], dcaInfo[1]);
@@ -149,15 +152,28 @@ struct TrackPropagation {
   }
   PROCESS_SWITCH(TrackPropagation, processStandard, "Process without covariance", true);
 
-  void processCovariance(soa::Join<aod::StoredTracksIU, aod::TracksCovIU> const& tracks, aod::Collisions const&, aod::BCsWithTimestamps const& bcs)
+  void processCovariance(tracksWithMc const& tracks, aod::McParticles const& mcParticles, aod::Collisions const& collisions, aod::BCsWithTimestamps const& bcs)
+  {
+    if (useImprover == kTRUE) {
+      propagateAndUpdateTrack(tracks, mcParticles, collisions, bcs);
+    } else {
+      propagateAndUpdateTrack(tracks, tracks, collisions, bcs);
+    }
+  }
+
+  template <typename P, typename T>
+  void propagateAndUpdateTrack(T const& tracks, P const& mcParticles, aod::Collisions const& collisions, aod::BCsWithTimestamps const& bcs)
   {
     if (bcs.size() == 0) {
       return;
     }
+
     initCCDB(bcs.begin());
 
     o2::dataformats::DCA dcaInfoCov;
     o2::dataformats::VertexBase vtx;
+    // hsharma
+    o2::dataformats::VertexBase vtxMC;
 
     tracksParPropagated.reserve(tracks.size());
     tracksParExtensionPropagated.reserve(tracks.size());
@@ -181,8 +197,17 @@ struct TrackPropagation {
           o2::base::Propagator::Instance()->propagateToDCABxByBz(vtx, trackParCov, 2.f, matCorr, &dcaInfoCov);
         }
         trackType = aod::track::Track;
-	std::cout << "++++++++++++++++++++++++  a test print ++++++++++++++++++++++++" << std::endl;
       }
+
+      bool has_MCparticle = track.has_mcParticle();
+      if (has_MCparticle) {
+        auto mcparticle = track.mcParticle();
+        // setting MC particle production point
+        vtxMC.setPos({mcparticle.vx(), mcparticle.vy(), mcparticle.vz()});
+        vtxMC.setCov(1, 0, 1, 0, 0, 1); // ??? or All ZEROs // == 1 cm2? wrt prop point
+        o2::base::Propagator::Instance()->propagateToDCABxByBz(vtxMC, trackParCov, 2.f, matCorr, &dcaInfoCov);
+      }
+
       FillTracksPar(track, trackType, trackParCov);
       if (fillTracksDCA) {
         tracksDCA(dcaInfoCov.getY(), dcaInfoCov.getZ());
