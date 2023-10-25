@@ -29,6 +29,7 @@
 #include "Framework/HistogramRegistry.h"
 #include "DataFormatsCalibration/MeanVertexObject.h"
 #include "CommonConstants/GeomConstants.h"
+#include "Common/TableProducer/trackTuner.h"
 
 // The Run 3 AO2D stores the tracks at the point of innermost update. For a track with ITS this is the innermost (or second innermost)
 // ITS layer. For a track without ITS, this is the TPC inner wall or for loopers in the TPC even a radius beyond that.
@@ -64,6 +65,9 @@ struct TrackPropagation {
   o2::parameters::GRPMagField* grpmag = nullptr;
   o2::base::MatLayerCylSet* lut = nullptr;
 
+  // declaring an object of trackTuner
+  trackTuner trackTunerObj;
+
   Configurable<std::string> ccdburl{"ccdb-url", "http://alice-ccdb.cern.ch", "url of the ccdb repository"};
   Configurable<std::string> lutPath{"lutPath", "GLO/Param/MatLUT", "Path of the Lut parametrization"};
   Configurable<std::string> geoPath{"geoPath", "GLO/Config/GeometryAligned", "Path of the geometry file"};
@@ -72,11 +76,12 @@ struct TrackPropagation {
   Configurable<float> minPropagationRadius{"minPropagationDistance", o2::constants::geom::XTPCInnerRef + 0.1, "Only tracks which are at a smaller radius will be propagated, defaults to TPC inner wall"};
   Configurable<bool> useImprover{"useImprover", 0, "Apply Improver/DCA corrections to MC"};
 
-  using tracksWithMc = soa::Join<aod::StoredTracksIU, aod::McTrackLabels, aod::TracksCovIU>;
+  using tracksIUWithMc = soa::Join<aod::StoredTracksIU, aod::McTrackLabels, aod::TracksCovIU>;
+  using tracksIU = soa::Join<aod::StoredTracksIU, aod::TracksCovIU>;
 
   void init(o2::framework::InitContext& initContext)
   {
-    if (doprocessCovariance == true && doprocessStandard == true) {
+    if (((doprocessCovarianceMc == true) || (doprocessCovarianceData == true)) && doprocessStandard == true) {
       LOGF(fatal, "Cannot enable processStandard and processCovariance at the same time. Please choose one.");
     }
 
@@ -97,6 +102,9 @@ struct TrackPropagation {
     ccdb->setCaching(true);
     ccdb->setLocalObjectValidityChecking();
     lut = o2::base::MatLayerCylSet::rectifyPtrFromFile(ccdb->get<o2::base::MatLayerCylSet>(lutPath));
+
+    // initialize track Tuner object
+    trackTunerObj.init(ccdb);
   }
 
   void initCCDB(aod::BCsWithTimestamps::iterator const& bc)
@@ -111,7 +119,6 @@ struct TrackPropagation {
     mVtx = ccdb->getForTimeStamp<o2::dataformats::MeanVertexObject>(mVtxPath, bc.timestamp());
     runNumber = bc.runNumber();
   }
-
   template <typename TTrack, typename TTrackPar>
   void FillTracksPar(TTrack& track, aod::track::TrackTypeEnum trackType, TTrackPar& trackPar)
   {
@@ -152,28 +159,25 @@ struct TrackPropagation {
   }
   PROCESS_SWITCH(TrackPropagation, processStandard, "Process without covariance", true);
 
-  void processCovariance(tracksWithMc const& tracks, aod::McParticles const& mcParticles, aod::Collisions const& collisions, aod::BCsWithTimestamps const& bcs)
+  void processCovarianceMc(tracksIUWithMc const& tracks, aod::McParticles const& mcParticles, aod::Collisions const& collisions, aod::BCsWithTimestamps const& bcs)
   {
-    if (useImprover == kTRUE) {
-      propagateAndUpdateTrack(tracks, mcParticles, collisions, bcs);
-    } else {
-      propagateAndUpdateTrack(tracks, tracks, collisions, bcs);
-    }
+    propagateAndUpdateTrack<true>(tracks, mcParticles, collisions, bcs);
   }
 
-  template <typename P, typename T>
+  void processCovarianceData(tracksIU const& tracks, aod::McParticles const& mcParticles, aod::Collisions const& collisions, aod::BCsWithTimestamps const& bcs)
+  {
+    propagateAndUpdateTrack<false>(tracks, tracks, collisions, bcs);
+  }
+
+  template <bool IS_MC, typename P, typename T>
   void propagateAndUpdateTrack(T const& tracks, P const& mcParticles, aod::Collisions const& collisions, aod::BCsWithTimestamps const& bcs)
   {
     if (bcs.size() == 0) {
       return;
     }
-
     initCCDB(bcs.begin());
-
     o2::dataformats::DCA dcaInfoCov;
     o2::dataformats::VertexBase vtx;
-    // hsharma
-    o2::dataformats::VertexBase vtxMC;
 
     tracksParPropagated.reserve(tracks.size());
     tracksParExtensionPropagated.reserve(tracks.size());
@@ -186,6 +190,19 @@ struct TrackPropagation {
       aod::track::TrackTypeEnum trackType = (aod::track::TrackTypeEnum)track.trackType();
       // Only propagate tracks which have passed the innermost wall of the TPC (e.g. skipping loopers etc). Others fill unpropagated.
       if (track.trackType() == aod::track::TrackIU && track.x() < minPropagationRadius) {
+        if constexpr (IS_MC) {
+          if (useImprover) {
+            // call track propagator
+            // this function reads many many things
+            //  - reads track params
+            bool has_MCparticle = track.has_mcParticle();
+            if (has_MCparticle) {
+              std::cout << " MC particle exists... " << std::endl;
+              auto mcparticle = track.mcParticle();
+              trackTunerObj.tuneTrackParams(mcparticle, trackParCov, matCorr, &dcaInfoCov);
+            }
+          }
+        }
         if (track.has_collision()) {
           auto const& collision = track.collision();
           vtx.setPos({collision.posX(), collision.posY(), collision.posZ()});
@@ -197,15 +214,6 @@ struct TrackPropagation {
           o2::base::Propagator::Instance()->propagateToDCABxByBz(vtx, trackParCov, 2.f, matCorr, &dcaInfoCov);
         }
         trackType = aod::track::Track;
-      }
-
-      bool has_MCparticle = track.has_mcParticle();
-      if (has_MCparticle) {
-        auto mcparticle = track.mcParticle();
-        // setting MC particle production point
-        vtxMC.setPos({mcparticle.vx(), mcparticle.vy(), mcparticle.vz()});
-        vtxMC.setCov(1, 0, 1, 0, 0, 1); // ??? or All ZEROs // == 1 cm2? wrt prop point
-        o2::base::Propagator::Instance()->propagateToDCABxByBz(vtxMC, trackParCov, 2.f, matCorr, &dcaInfoCov);
       }
 
       FillTracksPar(track, trackType, trackParCov);
@@ -224,7 +232,10 @@ struct TrackPropagation {
                                       trackParCov.getSigma1Pt2());
     }
   }
-  PROCESS_SWITCH(TrackPropagation, processCovariance, "Process with covariance", false);
+
+  PROCESS_SWITCH(TrackPropagation, processCovarianceMc, "Process with covariance on MC", true);
+
+  PROCESS_SWITCH(TrackPropagation, processCovarianceData, "Process with covariance on Data", false);
 };
 
 //****************************************************************************************
