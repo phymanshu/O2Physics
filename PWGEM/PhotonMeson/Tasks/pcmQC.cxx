@@ -49,13 +49,16 @@ using namespace o2::soa;
 using namespace o2::aod::pwgem::photon;
 using std::array;
 
-using MyCollisions = soa::Join<aod::EMReducedEvents, aod::EMReducedEventsMult, aod::EMReducedEventsCent>;
+using MyCollisions = soa::Join<aod::EMEvents, aod::EMEventsMult, aod::EMEventsCent>;
 using MyCollision = MyCollisions::iterator;
 
-using MyV0Photons = soa::Join<aod::V0PhotonsKF, aod::V0KFEMReducedEventIds>;
+using MyV0Photons = soa::Join<aod::V0PhotonsKF, aod::V0KFEMEventIds>;
 using MyV0Photon = MyV0Photons::iterator;
 
 struct PCMQC {
+  Configurable<int> cfgCentEstimator{"cfgCentEstimator", 2, "FT0M:0, FT0A:1, FT0C:2"};
+  Configurable<float> cfgCentMin{"cfgCentMin", 0, "min. centrality"};
+  Configurable<float> cfgCentMax{"cfgCentMax", 999.f, "max. centrality"};
 
   Configurable<std::string> fConfigPCMCuts{"cfgPCMCuts", "qc,qc_ITSTPC,qc_ITSonly,qc_TPConly,wwire_ib,nocut", "Comma separated list of v0 photon cuts"};
   std::vector<V0PhotonCut> fPCMCuts;
@@ -135,7 +138,9 @@ struct PCMQC {
     fOutputV0.setObject(reinterpret_cast<THashList*>(fMainList->FindObject("V0")));
   }
 
-  Preslice<MyV0Photons> perCollision = aod::v0photonkf::emreducedeventId;
+  Preslice<MyV0Photons> perCollision = aod::v0photonkf::emeventId;
+  Partition<MyCollisions> grouped_collisions = (cfgCentMin < o2::aod::cent::centFT0M && o2::aod::cent::centFT0M < cfgCentMax) || (cfgCentMin < o2::aod::cent::centFT0A && o2::aod::cent::centFT0A < cfgCentMax) || (cfgCentMin < o2::aod::cent::centFT0C && o2::aod::cent::centFT0C < cfgCentMax); // this goes to same event.
+
   void processQC(MyCollisions const& collisions, MyV0Photons const& v0photons, aod::V0Legs const& v0legs)
   {
     THashList* list_ev_before = static_cast<THashList*>(fMainList->FindObject("Event")->FindObject(event_types[0].data()));
@@ -143,7 +148,11 @@ struct PCMQC {
     THashList* list_v0 = static_cast<THashList*>(fMainList->FindObject("V0"));
     THashList* list_v0leg = static_cast<THashList*>(fMainList->FindObject("V0Leg"));
 
-    for (auto& collision : collisions) {
+    for (auto& collision : grouped_collisions) {
+      const float centralities[3] = {collision.centFT0M(), collision.centFT0A(), collision.centFT0C()};
+      if (centralities[cfgCentEstimator] < cfgCentMin || cfgCentMax < centralities[cfgCentEstimator]) {
+        continue;
+      }
 
       o2::aod::pwgem::photon::histogram::FillHistClass<EMHistType::kEvent>(list_ev_before, "", collision);
       if (!fEMEventCut.IsSelected(collision)) {

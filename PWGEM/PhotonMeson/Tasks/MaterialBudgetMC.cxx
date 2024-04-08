@@ -46,10 +46,10 @@ using namespace o2::aod::photonpair;
 using namespace o2::aod::pwgem::mcutil;
 using namespace o2::aod::pwgem::photon;
 
-using MyCollisions = soa::Join<aod::EMReducedEvents, aod::EMReducedEventsMult, aod::EMReducedEventsCent, aod::EMReducedEventsNgPCM>;
+using MyCollisions = soa::Join<aod::EMEvents, aod::EMEventsMult, aod::EMEventsCent, aod::EMEventsNgPCM, aod::EMMCEventLabels>;
 using MyCollision = MyCollisions::iterator;
 
-using MyV0Photons = soa::Join<aod::V0PhotonsKF, aod::V0KFEMReducedEventIds>;
+using MyV0Photons = soa::Join<aod::V0PhotonsKF, aod::V0KFEMEventIds>;
 using MyV0Photon = MyV0Photons::iterator;
 
 using MyMCV0Legs = soa::Join<aod::V0Legs, aod::V0LegMCLabels>;
@@ -57,9 +57,9 @@ using MyMCV0Leg = MyMCV0Legs::iterator;
 
 struct MaterialBudgetMC {
 
-  Configurable<float> CentMin{"CentMin", -1, "min. centrality"};
-  Configurable<float> CentMax{"CentMax", 999, "max. centrality"};
-  Configurable<std::string> CentEstimator{"CentEstimator", "FT0M", "centrality estimator"};
+  Configurable<int> cfgCentEstimator{"cfgCentEstimator", 2, "FT0M:0, FT0A:1, FT0C:2"};
+  Configurable<float> cfgCentMin{"cfgCentMin", 0, "min. centrality"};
+  Configurable<float> cfgCentMax{"cfgCentMax", 999, "max. centrality"};
 
   Configurable<float> maxY{"maxY", 0.9, "maximum rapidity for generated particles"};
   Configurable<float> maxRgen{"maxRgen", 90.f, "maximum radius for generated particles"};
@@ -216,7 +216,7 @@ struct MaterialBudgetMC {
     LOGF(info, "Number of Pair cuts = %d", fPairCuts.size());
   }
 
-  Preslice<MyV0Photons> perCollision_pcm = aod::v0photonkf::emreducedeventId;
+  Preslice<MyV0Photons> perCollision_pcm = aod::v0photonkf::emeventId;
 
   template <PairType pairtype, typename TG1, typename TG2, typename TCut1, typename TCut2>
   bool IsSelectedPair(TG1 const& g1, TG2 const& g2, TCut1 const& tagcut, TCut2 const& probecut)
@@ -232,6 +232,10 @@ struct MaterialBudgetMC {
     THashList* list_v0 = static_cast<THashList*>(fMainList->FindObject("V0"));
     double value[4] = {0.f};
     for (auto& collision : collisions) {
+      float centralities[3] = {collision.centFT0M(), collision.centFT0A(), collision.centFT0C()};
+      if (centralities[cfgCentEstimator] < cfgCentMin || cfgCentMax < centralities[cfgCentEstimator]) {
+        continue;
+      }
 
       o2::aod::pwgem::photon::histogram::FillHistClass<EMHistType::kEvent>(list_ev_pair_before, "", collision);
       if (!fEMEventCut.IsSelected(collision)) {
@@ -258,7 +262,7 @@ struct MaterialBudgetMC {
           bool is_photon_physical_primary = false;
           if (photonid > 0) {
             auto mcphoton = mcparticles.iteratorAt(photonid);
-            is_photon_physical_primary = IsPhysicalPrimary(mcphoton.emreducedmcevent(), mcphoton, mcparticles);
+            is_photon_physical_primary = mcphoton.isPhysicalPrimary() || mcphoton.producedByGenerator();
           }
           if (!is_photon_physical_primary) {
             continue;
@@ -284,6 +288,14 @@ struct MaterialBudgetMC {
     THashList* list_pair_ss = static_cast<THashList*>(fMainList->FindObject("Pair")->FindObject(pairnames[pairtype].data()));
 
     for (auto& collision : collisions) {
+      float centralities[3] = {collision.centFT0M(), collision.centFT0A(), collision.centFT0C()};
+      if (centralities[cfgCentEstimator] < cfgCentMin || cfgCentMax < centralities[cfgCentEstimator]) {
+        continue;
+      }
+      if (!fEMEventCut.IsSelected(collision)) {
+        continue;
+      }
+
       auto photons1_coll = photons1.sliceBy(perCollision1, collision.globalIndex());
       auto photons2_coll = photons2.sliceBy(perCollision2, collision.globalIndex());
 
@@ -333,7 +345,7 @@ struct MaterialBudgetMC {
                   continue;
                 }
                 auto pi0mc = mcparticles.iteratorAt(pi0id);
-                if (!IsPhysicalPrimary(pi0mc.emreducedmcevent(), pi0mc, mcparticles)) {
+                if (!(pi0mc.isPhysicalPrimary() || pi0mc.producedByGenerator())) {
                   continue;
                 }
 
@@ -357,25 +369,30 @@ struct MaterialBudgetMC {
     }           // end of collision loop
   }
 
-  Partition<MyCollisions> grouped_collisions = CentMin < o2::aod::cent::centFT0M && o2::aod::cent::centFT0M < CentMax; // this goes to same event.
-  Filter collisionFilter_common = nabs(o2::aod::collision::posZ) < 10.f && o2::aod::collision::numContrib > (uint16_t)0 && o2::aod::evsel::sel8 == true && CentMin < o2::aod::cent::centFT0M&& o2::aod::cent::centFT0M < CentMax;
-  Filter collisionFilter_subsys = o2::aod::emreducedevent::ngpcm >= 2;
-  using MyFilteredCollisions = soa::Filtered<MyCollisions>; // this goes to mixed event.
+  Partition<MyCollisions> grouped_collisions = cfgCentMin < o2::aod::cent::centFT0M && o2::aod::cent::centFT0M < cfgCentMax; // this goes to same event.
+  Filter collisionFilter_common = nabs(o2::aod::collision::posZ) < 10.f && o2::aod::collision::numContrib > (uint16_t)0 && o2::aod::evsel::sel8 == true;
+  Filter collisionFilter_centrality = (cfgCentMin < o2::aod::cent::centFT0M && o2::aod::cent::centFT0M < cfgCentMax) || (cfgCentMin < o2::aod::cent::centFT0A && o2::aod::cent::centFT0A < cfgCentMax) || (cfgCentMin < o2::aod::cent::centFT0C && o2::aod::cent::centFT0C < cfgCentMax);
+  Filter collisionFilter_subsys = o2::aod::emevent::ngpcm >= 2;
+  using MyFilteredCollisions = soa::Filtered<MyCollisions>; // this goes to same event pairing.
 
-  void processMBMC(MyCollisions const& collisions, MyFilteredCollisions const& filtered_collisions, MyV0Photons const& v0photons, MyMCV0Legs const& legs, aod::EMMCParticles const& mcparticles, aod::EMReducedMCEvents const& mccollisions)
+  void processMBMC(MyCollisions const& collisions, MyFilteredCollisions const& filtered_collisions, MyV0Photons const& v0photons, MyMCV0Legs const& legs, aod::EMMCParticles const& mcparticles, aod::EMMCEvents const& mccollisions)
   {
     fillsinglephoton<PairType::kPCMPCM>(grouped_collisions, v0photons, perCollision_pcm, fProbeCuts, legs, mcparticles, mccollisions);
     TruePairing<PairType::kPCMPCM>(filtered_collisions, v0photons, v0photons, perCollision_pcm, perCollision_pcm, fTagCuts, fProbeCuts, fPairCuts, legs, mcparticles, mccollisions);
   }
 
-  PresliceUnsorted<aod::EMMCParticles> perMcCollision = aod::emmcparticle::emreducedmceventId;
-  void processGen(soa::Join<MyCollisions, aod::EMReducedMCEventLabels> const& collisions, aod::EMReducedMCEvents const&, aod::EMMCParticles const& mcparticles)
+  PresliceUnsorted<aod::EMMCParticles> perMcCollision = aod::emmcparticle::emmceventId;
+  void processGen(MyCollisions const& collisions, aod::EMMCEvents const&, aod::EMMCParticles const& mcparticles)
   {
     // loop over mc stack and fill histograms for pure MC truth signals
     // all MC tracks which belong to the MC event corresponding to the current reconstructed event
 
-    for (auto& collision : collisions) {
-      auto mccollision = collision.emreducedmcevent();
+    for (auto& collision : grouped_collisions) {
+      float centralities[3] = {collision.centFT0M(), collision.centFT0A(), collision.centFT0C()};
+      if (centralities[cfgCentEstimator] < cfgCentMin || cfgCentMax < centralities[cfgCentEstimator]) {
+        continue;
+      }
+      auto mccollision = collision.emmcevent();
       // LOGF(info, "mccollision.globalIndex() = %d", mccollision.globalIndex());
 
       reinterpret_cast<TH1F*>(fMainList->FindObject("Generated")->FindObject("hCollisionCounter"))->Fill(1.0);
