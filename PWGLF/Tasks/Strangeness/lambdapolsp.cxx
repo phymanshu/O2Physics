@@ -189,6 +189,10 @@ struct lambdapolsp {
         histos.add("hpy2Ty1Ax1Cvscentpteta", "hpy2Ty1Ax1Cvscentpteta", HistType::kTHnSparseF, {centAxis, thnAxispT, configetaAxis, spAxis}, true);
         histos.add("hpx1Ax1Cvscentpteta", "hpx1Ax1Cvscentpteta", HistType::kTHnSparseF, {centAxis, thnAxispT, configetaAxis, spAxis}, true);
         histos.add("hpy1Ay1Cvscentpteta", "hpy1Ay1Cvscentpteta", HistType::kTHnSparseF, {centAxis, thnAxispT, configetaAxis, spAxis}, true);
+        histos.add("hpx1Avscentpteta", "hpx1Avscentpteta", HistType::kTHnSparseF, {centAxis, thnAxispT, configetaAxis, spAxis}, true);
+        histos.add("hpx1Cvscentpteta", "hpx1Cvscentpteta", HistType::kTHnSparseF, {centAxis, thnAxispT, configetaAxis, spAxis}, true);
+        histos.add("hpy1Avscentpteta", "hpy1Avscentpteta", HistType::kTHnSparseF, {centAxis, thnAxispT, configetaAxis, spAxis}, true);
+        histos.add("hpy1Cvscentpteta", "hpy1Cvscentpteta", HistType::kTHnSparseF, {centAxis, thnAxispT, configetaAxis, spAxis}, true);
 
         histos.add("hpx2Tx1Avscentpteta", "hpx2Tx1Avscentpteta", HistType::kTHnSparseF, {centAxis, thnAxispT, configetaAxis, spAxis}, true);
         histos.add("hpx2Tx1Cvscentpteta", "hpx2Tx1Cvscentpteta", HistType::kTHnSparseF, {centAxis, thnAxispT, configetaAxis, spAxis}, true);
@@ -462,6 +466,13 @@ struct lambdapolsp {
       return false;
     }
 
+    if (pid == 0 && (TMath::Abs(v0.dcapostopv()) < cMinV0DCAPr || TMath::Abs(v0.dcanegtopv()) < cMinV0DCAPi)) {
+      return false;
+    }
+    if (pid == 1 && (TMath::Abs(v0.dcapostopv()) < cMinV0DCAPi || TMath::Abs(v0.dcanegtopv()) < cMinV0DCAPr)) {
+      return false;
+    }
+
     // if we made it this far, it's good
     return true;
   }
@@ -727,6 +738,10 @@ struct lambdapolsp {
         auto x1Cy1A = modqxZDCC * modqyZDCA;
 
         // detector acceptance corrections to match v2{ZDC}
+        auto x1A = modqxZDCA;
+        auto x1C = modqxZDCC;
+        auto y1A = modqyZDCA;
+        auto y1C = modqyZDCC;
         auto x2T = TMath::Cos(2 * GetPhiInRange(track.phi()));
         auto y2T = TMath::Sin(2 * GetPhiInRange(track.phi()));
         auto x2Tx1A = TMath::Cos(2 * GetPhiInRange(track.phi())) * modqxZDCA;
@@ -775,6 +790,10 @@ struct lambdapolsp {
           histos.fill(HIST("hpy1Ay1Cvscentpteta"), centrality, track.pt(), track.eta(), y1Ay1C);
           histos.fill(HIST("hpx1Ay1Cvscentpteta"), centrality, track.pt(), track.eta(), x1Ay1C);
           histos.fill(HIST("hpy1Ax1Cvscentpteta"), centrality, track.pt(), track.eta(), x1Cy1A);
+          histos.fill(HIST("hpx1Avscentpteta"), centrality, track.pt(), track.eta(), x1A);
+          histos.fill(HIST("hpx1Cvscentpteta"), centrality, track.pt(), track.eta(), x1C);
+          histos.fill(HIST("hpy1Avscentpteta"), centrality, track.pt(), track.eta(), y1A);
+          histos.fill(HIST("hpy1Cvscentpteta"), centrality, track.pt(), track.eta(), y1C);
 
           /*} else {
             histos.fill(HIST("hpuxQxpvscentptetaneg"), centrality, track.pt(), track.eta(), uxQxp);
@@ -907,14 +926,30 @@ struct lambdapolsp {
 
     //___________________________________________________________________________________________________
     // retrieve further info provided by StraZDCSP
-    /*auto qxZDCA = collision.qxZDCA();
+    auto qxZDCA = collision.qxZDCA();
     auto qxZDCC = collision.qxZDCC();
     auto qyZDCA = collision.qyZDCA();
-    auto qyZDCC = collision.qyZDCC();*/
+    auto qyZDCC = collision.qyZDCC();
     auto psiZDCC = collision.psiZDCC();
     auto psiZDCA = collision.psiZDCA();
-    // auto psiZDC=TMath::ATan2((qyZDCC-qyZDCA),(qxZDCC-qxZDCA)); //full event plane
-    auto psiZDC = psiZDCC - psiZDCA;
+    double modqxZDCA;
+    double modqyZDCA;
+    double modqxZDCC;
+    double modqyZDCC;
+
+    if (cqvas) {
+      modqxZDCA = TMath::Sqrt((qxZDCA * qxZDCA) + (qyZDCA * qyZDCA)) * TMath::Cos(psiZDCA);
+      modqyZDCA = TMath::Sqrt((qxZDCA * qxZDCA) + (qyZDCA * qyZDCA)) * TMath::Sin(psiZDCA);
+      modqxZDCC = TMath::Sqrt((qxZDCC * qxZDCC) + (qyZDCC * qyZDCC)) * TMath::Cos(psiZDCC);
+      modqyZDCC = TMath::Sqrt((qxZDCC * qxZDCC) + (qyZDCC * qyZDCC)) * TMath::Sin(psiZDCC);
+    } else {
+      modqxZDCA = qxZDCA;
+      modqyZDCA = qyZDCA;
+      modqxZDCC = qxZDCC;
+      modqyZDCC = qyZDCC;
+    }
+
+    auto psiZDC = TMath::ATan2((modqyZDCC - modqyZDCA), (modqxZDCC - modqxZDCA)); // full event plane
 
     // fill histograms
     histos.fill(HIST("hCentrality"), centrality);
@@ -957,6 +992,9 @@ struct lambdapolsp {
       if (shouldReject(LambdaTag, aLambdaTag, Lambdadummy, AntiLambdadummy)) {
         continue;
       }
+
+      if (TMath::Abs(v0.eta()) > 0.8)
+        continue;
 
       int taga = LambdaTag;
       int tagb = aLambdaTag;
