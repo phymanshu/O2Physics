@@ -127,7 +127,7 @@ struct HfTaskD0 {
   // using TracksWithExtra = o2::soa::Join<o2::aod::FullTracks, o2::aod::TrackSelection>;
 
   Filter filterD0Flag = (o2::aod::hf_track_index::hfflag & static_cast<uint8_t>(BIT(aod::hf_cand_2prong::DecayType::D0ToPiK))) != static_cast<uint8_t>(0);
-  
+
   Preslice<TracksWPid> perCol = aod::track::collisionId;
   Preslice<aod::HfCand2Prong> candD0PerCollision = aod::hf_cand::collisionId;
 
